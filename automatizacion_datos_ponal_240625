@@ -1,0 +1,165 @@
+#  Código para automatizar la descarga de datos delictivos desde la página de la Policía Nacional de Colombia
+
+# 📦 Importación de librerías necesarias para automatizar el navegador y manejar archivos
+
+from selenium import webdriver  # Controla el navegador automáticamente (abrir, hacer clic, llenar formularios, etc.)
+from selenium.webdriver.chrome.service import Service  # Configura cómo se lanza el navegador Chrome
+from selenium.webdriver.chrome.options import Options  # Permite ajustar opciones de comportamiento para Chrome
+from selenium.webdriver.common.by import By  # Permite encontrar elementos de la página por su ID, clase, nombre, etc.
+from selenium.webdriver.common.keys import Keys  # Permite simular teclas del teclado, como Enter
+from selenium.webdriver.support.ui import WebDriverWait  # Espera hasta que elementos aparezcan antes de seguir
+from selenium.webdriver.support import expected_conditions as EC  # Define condiciones para esperar elementos específicos
+from webdriver_manager.chrome import ChromeDriverManager  # Descarga y mantiene actualizado el controlador de Chrome
+
+import time  # Permite pausar el programa por segundos
+import os  # Permite acceder al sistema de archivos (carpetas, nombres de archivos, mover archivos, etc.)
+import urllib.parse  # Permite traducir o leer direcciones web (URLs) codificadas
+import unidecode  # Permite remover acentos de palabras para facilitar las comparaciones
+
+# 🗓️ Diccionario que convierte nombres de meses a su número correspondiente (por ejemplo: MAYO → 05)
+MESES = {
+    "ENERO": "01", "FEBRERO": "02", "MARZO": "03", "ABRIL": "04",
+    "MAYO": "05", "JUNIO": "06", "JULIO": "07", "AGOSTO": "08",
+    "SEPTIEMBRE": "09", "OCTUBRE": "10", "NOVIEMBRE": "11", "DICIEMBRE": "12"
+}
+
+# 📂 Lista de delitos que se van a buscar, junto con la ruta donde se deben guardar los archivos descargados
+delitos_a_descargar = [
+    ("Delitos sexuales", r"C:\Users\USUARIO\Desktop\Seguridad\DelitosSexuales\Raw"),
+    ("Homicidios", r"C:\Users\USUARIO\Desktop\Seguridad\Homicidios\Raw"),
+    ("Lesiones personales", r"C:\Users\USUARIO\Desktop\Seguridad\LesionesPersonales\Raw"),
+    ("Hurto a personas", r"C:\Users\USUARIO\Desktop\Seguridad\HurtoPersonas\Raw"),
+    ("Hurto de automotores", r"C:\Users\USUARIO\Desktop\Seguridad\HurtoAutomotores\Raw"),
+    ("Violencia intrafamiliar", r"C:\Users\USUARIO\Desktop\Seguridad\ViolenciaIntrafamiliar\Raw"),
+    ("Hurtos a entidades comerciales", r"C:\Users\USUARIO\Desktop\Seguridad\HurtosEntidadesComerciales\Raw"),
+    ("Hurtos a entidades financieras", r"C:\Users\USUARIO\Desktop\Seguridad\HurtosEntidadesFinancieras\Raw"),
+    ("Hurto a residencias", r"C:\Users\USUARIO\Desktop\Seguridad\HurtoResidencias\Raw"),
+]
+
+# 🔍 Año y mes que se quieren filtrar en la página web
+ANIO = "2025"
+MES_VISIBLE = "MAYO"  # Nombre del mes como aparece en la web
+MES_NUM = MESES[MES_VISIBLE.upper()]  # Se convierte a número (ej. "MAYO" → "05")
+
+# ⏳ Función que espera a que el archivo termine de descargarse y luego lo renombra con un nombre estandarizado
+def esperar_descarga_y_renombrar(carpeta, nombre_final):
+    timeout = 30  # Tiempo máximo de espera en segundos
+    tiempo_espera = 0  # Contador para controlar cuánto tiempo llevamos esperando
+
+    while tiempo_espera < timeout:
+        # Buscar archivos de Excel (.xlsx) que ya se hayan descargado completamente
+        archivos = [f for f in os.listdir(carpeta) if f.endswith(".xlsx") and not f.endswith(".crdownload")]
+        if archivos:
+            # Toma el archivo más reciente descargado
+            archivo = max([os.path.join(carpeta, f) for f in archivos], key=os.path.getctime)
+            nueva_ruta = os.path.join(carpeta, nombre_final)  # Ruta nueva con nombre final deseado
+            os.rename(archivo, nueva_ruta)  # Cambia el nombre del archivo descargado
+            print(f"✅ Archivo renombrado a: {nueva_ruta}")
+            return
+        time.sleep(1)  # Espera 1 segundo antes de volver a revisar
+        tiempo_espera += 1  # Suma 1 segundo al contador
+
+    print("❌ Descarga no detectada o no completada a tiempo.")
+
+# 🖱️ Función que aplica los filtros en la web para buscar el delito y año deseado, luego descarga el archivo
+def aplicar_filtros_y_descargar(driver, wait, delito, ruta_descarga):
+    os.makedirs(ruta_descarga, exist_ok=True)  # Crea la carpeta de destino si no existe
+
+    try:
+        print(f"\n🔍 Buscando: {delito} ({ANIO})")
+
+        # Hace clic en el menú del filtro de delitos
+        wait.until(EC.element_to_be_clickable((By.ID, "select2-edit-field-delito-de-impacto-target-id-container"))).click()
+        # Escribe el nombre del delito
+        input_delito = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input.select2-search__field")))
+        input_delito.clear()
+        input_delito.send_keys(delito)
+        time.sleep(0.5)
+        input_delito.send_keys(Keys.ENTER)
+
+        # Hace clic en el filtro de año
+        wait.until(EC.element_to_be_clickable((By.ID, "select2-edit-field-ano-deltos-impacto-value-container"))).click()
+        # Escribe el año
+        input_anio = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input.select2-search__field")))
+        input_anio.clear()
+        input_anio.send_keys(ANIO)
+        time.sleep(0.5)
+        input_anio.send_keys(Keys.ENTER)
+
+        # Hace clic en el botón "Buscar"
+        boton = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class,'form-submit') and normalize-space()='Buscar']")))
+        driver.execute_script("arguments[0].scrollIntoView(true); window.scrollBy(0,200);", boton)  # Asegura que el botón esté visible
+        time.sleep(0.5)
+        boton.click()
+
+        # Espera 4 segundos para que cargue la tabla de resultados
+        time.sleep(4)
+        filas = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
+        descargado = False  # Bandera para saber si se encontró el archivo
+
+        # Recorre cada fila de resultados en la tabla
+        for fila in filas:
+            celdas = fila.find_elements(By.TAG_NAME, "td")
+            if len(celdas) >= 3:
+                texto_delito = celdas[0].text.strip().lower()  # Primer campo: nombre del delito
+                texto_anio = celdas[1].text.strip()  # Segundo campo: año
+                link = celdas[2].find_element(By.TAG_NAME, "a")  # Tercer campo: enlace de descarga
+                href = urllib.parse.unquote(link.get_attribute("href"))  # Se decodifica el link
+
+                # Verifica que la fila coincide con el delito, año y mes que buscamos
+                if (
+                    unidecode.unidecode(delito.lower().split()[0]) in unidecode.unidecode(texto_delito)
+                    and texto_anio == ANIO
+                    and MES_VISIBLE.lower() in href.lower()
+                ):
+                    full_url = "https://www.policia.gov.co" + href  # Completa la URL
+                    print(f"🔗 Enlace detectado: {full_url}")
+                    driver.execute_script("arguments[0].click();", link)  # Hace clic en el enlace de descarga
+                    print(f"📥 Descarga iniciada para: {delito}")
+                    descargado = True
+
+                    # Renombra el archivo con formato estandarizado
+                    nombre_delito_limpio = unidecode.unidecode(delito.replace(" ", ""))
+                    nombre_archivo = f"BD_{nombre_delito_limpio}_{ANIO}{MES_NUM}.xlsx"
+                    esperar_descarga_y_renombrar(ruta_descarga, nombre_archivo)
+                    break  # Sale del ciclo si ya encontró y descargó el archivo
+
+        if not descargado:
+            print(f"❌ No se encontró archivo para: {delito}")
+
+    except Exception as e:
+        print(f"❌ Error con '{delito}': {e}")  # Muestra el error si ocurre algo inesperado
+
+# 🚀 Función principal que controla todo el proceso: abre el navegador, recorre cada delito y ejecuta la descarga
+def main():
+    # Configura cómo se abrirá el navegador
+    options = Options()
+    options.add_argument("--window-size=1920,1080")  # Define tamaño grande para evitar errores visuales
+    options.add_experimental_option("prefs", {
+        "download.prompt_for_download": False,  # No pedir confirmación para descargar
+        "directory_upgrade": True  # Permitir cambiar la carpeta de descarga
+    })
+
+    # Inicia el navegador Chrome con las configuraciones definidas
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+    wait = WebDriverWait(driver, 25)  # Define que esperará hasta 25 segundos por cada elemento
+
+    try:
+        # Recorre cada delito en la lista y ejecuta la descarga
+        for delito, ruta in delitos_a_descargar:
+            driver.get("https://www.policia.gov.co/estadistica-delictiva")  # Abre la página web
+            driver.execute_cdp_cmd("Page.setDownloadBehavior", {
+                "behavior": "allow",
+                "downloadPath": ruta  # Define dónde se guardará el archivo descargado
+            })
+            aplicar_filtros_y_descargar(driver, wait, delito, ruta)  # Llama la función que filtra y descarga
+            time.sleep(2)  # Espera 2 segundos entre descargas para evitar errores
+
+    finally:
+        driver.quit()  # Cierra el navegador al terminar todo
+        print("\n✅ Proceso completado para todos los delitos.")
+
+# ▶️ Inicia el programa si este archivo se está ejecutando directamente
+if __name__ == "__main__":
+    main()
